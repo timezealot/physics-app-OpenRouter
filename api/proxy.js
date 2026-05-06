@@ -148,9 +148,21 @@ export default async function handler(req, res) {
           continue;
         }
 
-        if (isQuota || isOverload) {
-          errMsg = errMsg.replace(/model:\s*[\w./:-]+/gi, '').replace(/\s{2,}/g, ' ').trim();
-          return res.status(apiRes.status).json({ error: { message: errMsg }, retryAfter });
+        if (isQuota) {
+          // 429: 이 모델 RPM 초과 → 다음 모델로 자동 전환
+          lastErrMsg = errMsg; lastStatus = apiRes.status;
+          if (!dynamicAdded && i >= modelsToTry.length - 2) {
+            dynamicAdded = true;
+            const dynamic = await getAvailableVisionModel(key);
+            if (dynamic && !modelsToTry.includes(dynamic)) modelsToTry.push(dynamic);
+          }
+          continue;
+        }
+
+        if (isOverload) {
+          // 503: 서버 과부하 → 다음 모델로 자동 전환
+          lastErrMsg = errMsg; lastStatus = apiRes.status;
+          continue;
         }
 
         lastErrMsg = errMsg; lastStatus = apiRes.status;
