@@ -1,14 +1,14 @@
 // Vercel Node.js Function — OpenRouter 버전
 export const config = { maxDuration: 300 };
 
-// OpenRouter 무료 비전 모델 화이트리스트
+// OpenRouter 무료 비전 모델 화이트리스트 (2026년 5월 기준 확인된 모델)
 const ALLOWED_MODELS = new Set([
-  'qwen/qwen2.5-vl-72b-instruct:free',   // 메인: 최고 성능 무료 비전 모델
-  'qwen/qwen2.5-vl-32b-instruct:free',   // fallback: 72B 실패 시
-  'google/gemma-3-27b-it:free',           // fallback2: Gemma 27B 비전
-  'meta-llama/llama-3.2-11b-vision-instruct:free', // 최후 fallback
+  'openrouter/free',                          // 자동 선택: 가용 무료 비전 모델 중 최적 자동 배정
+  'google/gemma-4-27b-it:free',               // Gemma 4 27B — 비전+추론 강함
+  'google/gemma-4-31b-it:free',               // Gemma 4 31B — 대안
+  'nvidia/nemotron-nano-12b-v2-vl:free',      // NVIDIA VL — OCR/차트 특화
 ]);
-const DEFAULT_MODEL = 'qwen/qwen2.5-vl-72b-instruct:free';
+const DEFAULT_MODEL = 'openrouter/free'; // 자동 선택으로 모델 단종 문제 방지
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -65,7 +65,7 @@ export default async function handler(req, res) {
     const orBody = {
       model,
       messages: orMessages,
-      max_tokens: 4000,
+      max_tokens: 8000,
       temperature: 0,
       top_p: 1.0,
     };
