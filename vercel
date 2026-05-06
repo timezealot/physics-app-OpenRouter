@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/or_proxy.js": {
+      "maxDuration": 300
+    }
+  }
+}
