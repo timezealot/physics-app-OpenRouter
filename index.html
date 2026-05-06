@@ -469,7 +469,7 @@ function trimForReason(s=''){s=safeText(s); return s.length>42?s.slice(0,42)+'â€
 async function callProxy({parts, system='', model=MODEL.ocr, attempt=0, setMsgFn=null}){
   const apiKey=document.getElementById('apiKey').value.trim();
   const activeModel = (attempt>=2 && model===MODEL.analysis) ? MODEL.fallback : model;
-  const res=await fetch('/api/or_proxy',{
+  const res=await fetch('/api/proxy',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({apiKey, system, model:activeModel, messages:[{role:'user',content:parts}]})
