@@ -124,10 +124,24 @@ let isAnalyzing = false;
 let lastRenderedHtml = '';
 let lastAnalysisJson = null;
 
+// 문제마다 다른 모델 사용 → 각 모델 RPM 분산
+const MODEL_POOL = [
+  'google/gemma-4-26b-a4b-it:free',
+  'google/gemma-4-31b-it:free',
+  'nvidia/nemotron-nano-12b-v2-vl:free',
+  'meta-llama/llama-3.2-11b-vision-instruct:free',
+  'mistralai/mistral-small-3.1-24b-instruct:free',
+];
+let modelPoolIdx = 0;
+function nextModel() {
+  const m = MODEL_POOL[modelPoolIdx % MODEL_POOL.length];
+  modelPoolIdx++;
+  return m;
+}
 const MODEL = {
-  ocr:      'google/gemma-4-26b-a4b-it:free', // MoE라 빠름, 비전 지원
-  analysis: 'google/gemma-4-26b-a4b-it:free', // 메인 분析
-  fallback: 'google/gemma-3-27b-it:free',     // 파싱 실패 시 대안
+  ocr:      'google/gemma-4-26b-a4b-it:free',
+  analysis: 'google/gemma-4-26b-a4b-it:free', // 첫 문제 기본값 (실제론 nextModel() 사용)
+  fallback: 'google/gemma-4-31b-it:free',
 };
 
 const MOCK_JSON = {
@@ -468,7 +482,7 @@ function trimForReason(s=''){s=safeText(s); return s.length>42?s.slice(0,42)+'�
 
 async function callProxy({parts, system='', model=MODEL.ocr, attempt=0, setMsgFn=null}){
   const apiKey=document.getElementById('apiKey').value.trim();
-  const activeModel = (attempt>=1 && model===MODEL.analysis) ? MODEL.fallback : model;
+  const activeModel = (attempt>=1) ? MODEL_POOL[modelPoolIdx % MODEL_POOL.length] : model;
   const res=await fetch('/api/proxy',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
@@ -498,7 +512,7 @@ async function callProxy({parts, system='', model=MODEL.ocr, attempt=0, setMsgFn
     // 429 할당량: retryAfter 만큼 1번만 대기
     if(isQuota && attempt < 1){
       const wait=Math.min(retryAfter, 70);
-      const waitMsg=`⏳ 분당 한도 도달 — ${wait}초 대기 후 재시도...`;
+      const waitMsg=`⏳ 분당 한도 도달 — ${wait}초 대기 후 다른 모델로 재시도...`;
       if(setMsgFn) setMsgFn(waitMsg);
       else{const el=document.getElementById('loadingText'); if(el) el.innerHTML=waitMsg;}
       await sleep(wait*1000);
@@ -892,7 +906,8 @@ async function analyze(){
 
       parts.push({type:'text',text:'위 이미지만 근거로 problems 배열에 이 문제 1개만 담아 JSON을 출력하세요.'});
 
-      let raw=await callProxy({parts,system:SYSTEM_DIRECT,model:MODEL.analysis});
+      const probModel=nextModel();
+      let raw=await callProxy({parts,system:SYSTEM_DIRECT,model:probModel});
       let probData=null;
 
       for(let retry=0; retry<=1; retry++){
@@ -907,7 +922,7 @@ async function analyze(){
               console.warn(`문제 ${probNum} 해설 품질 불량, 재시도...`);
               setMsg(`문제 ${probNum} 재시도 중...<br><span class="small muted">해설 인식 재시도합니다</span>`,pct);
               await sleep(4000);
-              raw=await callProxy({parts,system:SYSTEM_DIRECT,model:MODEL.analysis});
+              raw=await callProxy({parts,system:SYSTEM_DIRECT,model:probModel});
               continue;
             }
             probData=candidate;
@@ -915,7 +930,7 @@ async function analyze(){
           }
         }catch(e){
           console.warn(`문제 ${probNum} 파싱 실패`,e);
-          if(retry===0){ await sleep(4000); raw=await callProxy({parts,system:SYSTEM_DIRECT,model:MODEL.analysis}); continue; }
+          if(retry===0){ await sleep(4000); raw=await callProxy({parts,system:SYSTEM_DIRECT,model:probModel}); continue; }
         }
         break;
       }
