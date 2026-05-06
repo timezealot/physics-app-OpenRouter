@@ -46,7 +46,7 @@ textarea::placeholder{color:var(--text3)}
     <div class="logo">⚡</div>
     <div>
       <div class="header-title">물리 풀이 분석기</div>
-      <div class="header-sub">OpenRouter 테스트 버전 — Qwen2.5 VL 72B</div>
+      <div class="header-sub">OpenRouter 테스트 버전 — 자동 모델 선택</div>
     </div>
   </div>
   <div class="api-wrap">
@@ -125,9 +125,9 @@ let lastRenderedHtml = '';
 let lastAnalysisJson = null;
 
 const MODEL = {
-  ocr:      'qwen/qwen2.5-vl-32b-instruct:free',  // crop 번호 감지 등 간단 작업
-  analysis: 'qwen/qwen2.5-vl-72b-instruct:free',  // 메인 분析 (최고 성능 무료 비전)
-  fallback: 'qwen/qwen2.5-vl-32b-instruct:free',  // 파싱 실패 시 32B로 재시도
+  ocr:      'openrouter/free',              // 자동 선택 (가용 비전 모델 중 최적)
+  analysis: 'openrouter/free',              // 메인 분析
+  fallback: 'google/gemma-4-27b-it:free',  // 파싱 실패 시 Gemma 4 27B로 재시도
 };
 
 const MOCK_JSON = {
@@ -468,7 +468,7 @@ function trimForReason(s=''){s=safeText(s); return s.length>42?s.slice(0,42)+'�
 
 async function callProxy({parts, system='', model=MODEL.ocr, attempt=0, setMsgFn=null}){
   const apiKey=document.getElementById('apiKey').value.trim();
-  const activeModel = (attempt>=2 && model===MODEL.analysis) ? MODEL.fallback : model;
+  const activeModel = (attempt>=1 && model===MODEL.analysis) ? MODEL.fallback : model;
   const res=await fetch('/api/proxy',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
@@ -478,7 +478,7 @@ async function callProxy({parts, system='', model=MODEL.ocr, attempt=0, setMsgFn
   if(!res.ok){
     let msg='API 오류', retryAfter=65;
     try{const j=JSON.parse(raw); msg=j.error?.message||msg; retryAfter=j.retryAfter||65;}catch{msg=raw.slice(0,300);}
-    msg=msg.replace(/model:\s*qwen[\w.\/:-]*/gi,'').replace(/\s{2,}/g,' ').trim();
+    msg=msg.replace(/model:\s*[\w.\/:-]+/gi,'').replace(/\s{2,}/g,' ').trim();
 
     const isQuota   = res.status===429;
     const isOverload = res.status===503
@@ -976,7 +976,10 @@ ${JSON.stringify(problemResults)}
       const tRaw=await callProxy({parts:summaryParts,system:'JSON만 출력. 첫 글자는 {. 마크다운 펜스 금지.',model:MODEL.analysis});
       const tp=robustJsonParse(tRaw);
       totalData=tp.total||tp;
-    }catch(e){console.warn('총평 실패',e);}
+    }catch(e){
+      console.warn('총평 실패',e);
+      totalData.strengths='총평 생성에 실패했습니다. 문제별 피드백을 참고해 주세요.';
+    }
 
     const finalData={problems:problemResults,total:totalData};
     setMsg('완료!', 100);
