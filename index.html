@@ -46,7 +46,7 @@ textarea::placeholder{color:var(--text3)}
     <div class="logo">⚡</div>
     <div>
       <div class="header-title">물리 풀이 분석기</div>
-      <div class="header-sub">OpenRouter 테스트 버전 — 자동 모델 선택</div>
+      <div class="header-sub">OpenRouter 테스트 버전 — Gemma 4 26B</div>
     </div>
   </div>
   <div class="api-wrap">
@@ -125,9 +125,9 @@ let lastRenderedHtml = '';
 let lastAnalysisJson = null;
 
 const MODEL = {
-  ocr:      'openrouter/free',              // 자동 선택 (가용 비전 모델 중 최적)
-  analysis: 'openrouter/free',              // 메인 분析
-  fallback: 'google/gemma-4-27b-it:free',  // 파싱 실패 시 Gemma 4 27B로 재시도
+  ocr:      'google/gemma-4-26b-a4b-it:free', // MoE라 빠름, 비전 지원
+  analysis: 'google/gemma-4-26b-a4b-it:free', // 메인 분析
+  fallback: 'google/gemma-3-27b-it:free',     // 파싱 실패 시 대안
 };
 
 const MOCK_JSON = {
@@ -698,7 +698,7 @@ async function compressImage(file, mode='solution'){
       // 해설: 필터 없이 원본 색상 유지 (빨간 첨삭, 색깔 강조 보존)
       // 학생: 대비 강화로 흐린 손글씨 살리기
       const MIN = 800; // 최소 보장 크기
-      const MAX = mode==='student' ? 1800 : 1600;
+      const MAX = mode==='student' ? 1200 : 1100; // 크기 줄여 전송 속도 개선
       let w=img.width, h=img.height;
       // 너무 작으면 upscale
       if(w<MIN && h<MIN){
