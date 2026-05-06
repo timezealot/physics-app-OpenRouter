@@ -1,14 +1,15 @@
 // Vercel Node.js Function — OpenRouter 버전
 export const config = { maxDuration: 300 };
 
-// OpenRouter 무료 비전 모델 화이트리스트 (2026년 5월 기준 확인된 모델)
+// OpenRouter 무료 비전 모델 (빠른 응답 순)
 const ALLOWED_MODELS = new Set([
-  'openrouter/free',                          // 자동 선택: 가용 무료 비전 모델 중 최적 자동 배정
-  'google/gemma-4-27b-it:free',               // Gemma 4 27B — 비전+추론 강함
-  'google/gemma-4-31b-it:free',               // Gemma 4 31B — 대안
-  'nvidia/nemotron-nano-12b-v2-vl:free',      // NVIDIA VL — OCR/차트 특화
+  'google/gemma-4-26b-a4b-it:free',   // 메인: MoE 구조라 빠름 + 비전 지원
+  'google/gemma-4-31b-it:free',       // fallback1
+  'google/gemma-3-27b-it:free',       // fallback2
+  'nvidia/nemotron-nano-12b-v2-vl:free', // fallback3: 소형 빠름
+  'openrouter/free',                  // 최후수단: 자동 선택
 ]);
-const DEFAULT_MODEL = 'openrouter/free'; // 자동 선택으로 모델 단종 문제 방지
+const DEFAULT_MODEL = 'google/gemma-4-26b-a4b-it:free';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -70,16 +71,29 @@ export default async function handler(req, res) {
       top_p: 1.0,
     };
 
-    const apiRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${key}`,
-        'HTTP-Referer': 'https://physics-analyzer.vercel.app',
-        'X-Title': 'Physics Analyzer',
-      },
-      body: JSON.stringify(orBody),
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 240000); // 240초 타임아웃
+    let apiRes;
+    try {
+      apiRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${key}`,
+          'HTTP-Referer': 'https://physics-analyzer.vercel.app',
+          'X-Title': 'Physics Analyzer',
+        },
+        body: JSON.stringify(orBody),
+        signal: controller.signal,
+      });
+    } catch (fetchErr) {
+      clearTimeout(timeoutId);
+      if (fetchErr.name === 'AbortError') {
+        return res.status(503).json({ error: { message: '응답 시간이 너무 깁니다. 다시 시도해 주세요.' }, retryAfter: 10 });
+      }
+      throw fetchErr;
+    }
+    clearTimeout(timeoutId);
 
     const resText = await apiRes.text();
 
