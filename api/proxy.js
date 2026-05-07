@@ -147,7 +147,21 @@ export default async function handler(req, res) {
         }
 
         if (isQuota) {
-          // 429: 이 모델 RPM 초과 → 다음 모델로 자동 전환
+          // 일일 한도(daily) vs 분당 한도(RPM) 구분
+          const isDaily = errMsg.toLowerCase().includes('daily limit') ||
+                          errMsg.toLowerCase().includes('daily quota') ||
+                          errMsg.toLowerCase().includes('per day') ||
+                          errMsg.toLowerCase().includes('하루') ||
+                          retryAfter > 3600; // 1시간 이상이면 일일 한도로 간주 (RPM은 보통 60초 이하)
+          if (isDaily) {
+            // 일일 한도: 다른 모델로 바꿔도 소용없음 → 즉시 안내
+            return res.status(429).json({
+              error: { message: '오늘 무료 사용량(200회)을 모두 소진했습니다. 내일 자정(UTC)에 초기화됩니다.' },
+              retryAfter: 86400,
+              isDailyLimit: true,
+            });
+          }
+          // RPM 초과: 다음 모델로 자동 전환
           lastErrMsg = errMsg; lastStatus = apiRes.status;
           if (!dynamicAdded && i >= modelsToTry.length - 2) {
             dynamicAdded = true;
