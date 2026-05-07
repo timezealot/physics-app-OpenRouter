@@ -1,13 +1,11 @@
 // Vercel Node.js Function — OpenRouter 버전
 export const config = { maxDuration: 300 };
 
-// 선호 모델 순서 (빠르고 비전 지원 우선)
+// 선호 모델 순서 (2026년 5월 기준 확인된 무료 비전 모델)
 const PREFERRED_MODELS = [
-  'google/gemma-4-26b-a4b-it:free',
-  'google/gemma-4-31b-it:free',
-  'nvidia/nemotron-nano-12b-v2-vl:free',
-  'meta-llama/llama-3.2-11b-vision-instruct:free',
-  'mistralai/mistral-small-3.1-24b-instruct:free',
+  'google/gemma-4-26b-a4b-it:free',   // MoE 구조, 빠름, 비전 지원 확인
+  'google/gemma-4-31b-it:free',        // 31B dense, 비전 지원 확인
+  'openrouter/free',                   // 자동 선택 (위 둘 다 실패 시 fallback)
 ];
 
 // 실시간으로 현재 사용 가능한 무료 비전 모델 조회
