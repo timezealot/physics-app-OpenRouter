@@ -501,18 +501,34 @@ async function callProxy({parts, system='', model=MODEL.ocr, attempt=0, setMsgFn
       return callProxy({parts, system, model, attempt:attempt+1, setMsgFn});
     }
 
-    // 429 할당량: retryAfter 만큼 1번만 대기
-    if(isQuota && attempt < 1){
-      const wait=Math.min(retryAfter, 70);
-      const waitMsg=`⏳ 분당 한도 도달 — ${wait}초 대기 후 다른 모델로 재시도...`;
-      if(setMsgFn) setMsgFn(waitMsg);
-      else{const el=document.getElementById('loadingText'); if(el) el.innerHTML=waitMsg;}
-      await sleep(wait*1000);
-      return callProxy({parts, system, model, attempt:attempt+1, setMsgFn});
+    // 429 할당량 처리
+    if(isQuota){
+      // 일일 한도 여부 확인
+      let parsed429 = {};
+      try { parsed429 = JSON.parse(raw); } catch {}
+      const isDailyLimit = parsed429.isDailyLimit ||
+        msg.includes('오늘 무료 사용량') ||
+        msg.toLowerCase().includes('daily limit') ||
+        msg.toLowerCase().includes('daily quota') ||
+        retryAfter > 3600;
+
+      if(isDailyLimit){
+        throw new Error('오늘 무료 사용량(200회)을 모두 소진했습니다.\n내일 자정(UTC, 한국 오전 9시)에 초기화됩니다.');
+      }
+
+      // RPM 초과: 1번만 대기 후 재시도
+      if(attempt < 1){
+        const wait=Math.min(retryAfter, 70);
+        const waitMsg=`⏳ 분당 요청 한도 — ${wait}초 대기 후 다른 모델로 재시도...`;
+        if(setMsgFn) setMsgFn(waitMsg);
+        else{const el=document.getElementById('loadingText'); if(el) el.innerHTML=waitMsg;}
+        await sleep(wait*1000);
+        return callProxy({parts, system, model, attempt:attempt+1, setMsgFn});
+      }
+      throw new Error('분당 요청 한도 초과. 잠시 후 다시 시도해 주세요.');
     }
 
     if(isOverload) throw new Error('OpenRouter 서버 오류입니다. 잠시 후 다시 시도해 주세요.');
-    if(isQuota)    throw new Error('분당 요청 한도 초과. 1분 후 다시 시도해 주세요.');
     throw new Error(msg);
   }
   try{
