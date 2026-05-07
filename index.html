@@ -175,7 +175,7 @@ Use "[판독불가]" only for specific parts you truly cannot read at all, NOT f
 - calculation: 계산 과정의 숫자/연산 전부 포함. 예: "v = 16/7v → (흐릿)"
 - drawing: 그림/화살표/표/도형 보이는 것 전부 묘사. 예: "좌→우 화살표, 물체 질량 표기"
 - final_answer: 동그라미/밑줄 친 번호. 없으면 마지막 줄 숫자 사용.
-분析 제외 기준: 이미지가 완전히 새하얗거나 아무것도 없을 때만. 흐릿해도 분析 제외 절대 금지.
+분석 제외 기준: 이미지가 완전히 새하얗거나 아무것도 없을 때만. 흐릿해도 분석 제외 절대 금지.
 
 [Solution Image Reading]
 - Extract only equations containing = sign and conclusion (∴)
@@ -187,7 +187,7 @@ If [정답] AND [학생 선택] both provided:
   - [정답]=[학생 선택] → MUST be "일치" or "풀이가 다름". NEVER "오류 있음".
   - [정답]≠[학생 선택] → MUST be "오류 있음". Regardless of solution content.
 If either missing → "입력 필요"
-If image completely unreadable → "분析 제외"
+If image completely unreadable → "분석 제외"
 
 [Feedback — 반드시 한국어로 작성]
 "일치": evaluation: "해설과 동일한 접근으로 정확하게 풀었습니다." / improvement: "없음."
@@ -211,7 +211,7 @@ JSON schema (problems 배열에 이 문제 1개만):
   "problems":[{
     "number":1,
     "answer":"①",
-    "judgement":"일치|풀이가 다름|오류 있음|입력 필요|분析 제외",
+    "judgement":"일치|풀이가 다름|오류 있음|입력 필요|분석 제외",
     "solution_steps":["등호 포함 수식이나 한국어 문장만. 단독 숫자 라벨 제외."],
     "student_summary":{"equation":"학생 수식","calculation":"계산 과정","drawing":"그림 설명","final_answer":"①"},
     "feedback":{"evaluation":"실제 식 인용 필수 (한국어)","improvement":"구체적 방법 (한국어)"},
@@ -420,8 +420,8 @@ function applyWeightedScores(problem){
   // 이미지 직접 분석 모드: AI가 이미지를 보고 직접 판단하므로
   // 텍스트 유사도(sim)만으로 분석 제외하지 않음 — AI 판단을 신뢰
   // 이미지 분석 자체 실패한 경우만 제외
-  const isAnalysisFailed = (p.solution_steps||[]).some(s => s.includes('분석 실패') || s.includes('이미지 분석 실패'));
-  const hasSolutionText = (p.solution_steps||[]).some(s => s.length > 5 && !s.includes('분析 실패'));
+  const isAnalysisFailed = !!(p.solution_steps||[]).some(s => s.includes('분석 실패') || s.includes('이미지 분석 실패')) || p.judgement==='분석 제외';
+  const hasSolutionText = (p.solution_steps||[]).some(s => s.length > 5 && !s.includes('분석 실패') && !s.includes('이미지 분석 실패'));
   const lowConfidence = sim < 0.45 && solutionLen < 20 && studentLen < 10 && !hasSolutionText;
   if(isAnalysisFailed){
     p.judgement='분석 제외';
@@ -1023,11 +1023,11 @@ ${JSON.stringify(problemResults)}
 function renderResults(data){
   const rc=document.getElementById('resultContent');
   const weighted=(data.problems||[]).map(p=>{applyWeightedScores(p); return p;});
-  const active=weighted.filter(p=>p.judgement!=='분석 제외'&&p.judgement!=='분석 제외');
+  const active=weighted.filter(p=>p.judgement!=='분석 제외');
   const avg=(arr,key)=>arr.length?(arr.reduce((s,p)=>s+(p.scores?.[key]||0),0)/arr.length).toFixed(1):'-';
 
   // ── 제외 문제 배너 ──
-  const excluded=weighted.filter(p=>p.judgement==='분석 제외'||p.judgement==='분석 제외');
+  const excluded=weighted.filter(p=>p.judgement==='분석 제외');
   let html='';
   if(excluded.length){
     html+=`<div class="warn-card"><div class="warn-body">⚠ <b>제외된 문제</b><br>${excluded.map(p=>`${p.number}번 문제는 해설/학생 풀이 근거가 너무 약해 자동 제외했습니다.`).join('<br>')}</div></div>`;
