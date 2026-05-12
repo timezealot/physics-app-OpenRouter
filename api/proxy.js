@@ -1,10 +1,10 @@
 // Vercel Node.js Function — OpenRouter 버전
 export const config = { maxDuration: 300 };
 
-// 선호 모델 순서 (2026년 5월 기준, OCR 성능 우선)
+// 선호 모델 순서 - 속도 우선 (타임아웃 방지)
 const PREFERRED_MODELS = [
-  'nvidia/nemotron-nano-12b-v2-vl:free', // 1순위: OCRBench v2 1위, 손글씨 특화
-  'google/gemma-4-26b-a4b-it:free',    // 2순위: 빠름, 비전 지원
+  'google/gemma-4-26b-a4b-it:free',    // 1순위: MoE라 가장 빠름
+  'nvidia/nemotron-nano-12b-v2-vl:free', // 2순위: OCR 특화
   'google/gemma-4-31b-it:free',        // 3순위
   'openrouter/free',                   // 최후 fallback
 ];
@@ -33,7 +33,7 @@ async function getAvailableVisionModel(key) {
 // 단일 모델 호출
 async function callModel(key, model, orMessages, max_tokens) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 230000);
+  const timeoutId = setTimeout(() => controller.abort(), 55000); // 55초: Vercel 300초 내 다중 모델 시도 보장
   try {
     const apiRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
