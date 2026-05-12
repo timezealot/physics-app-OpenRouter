@@ -162,10 +162,10 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 const MODEL_POOL = [
-  'nvidia/nemotron-nano-12b-v2-vl:free', // 메인: OCRBench v2 1위, 손글씨/수식 인식 특화
-  'google/gemma-4-26b-a4b-it:free',    // fallback1
-  'google/gemma-4-31b-it:free',        // fallback2
-  'openrouter/free',                   // 최후 fallback
+  'google/gemma-4-26b-a4b-it:free',      // 1순위: MoE, 가장 빠름
+  'nvidia/nemotron-nano-12b-v2-vl:free', // 2순위: OCR 특화
+  'google/gemma-4-31b-it:free',          // 3순위
+  'openrouter/free',                     // 최후 fallback
 ];
 let modelPoolIdx = 0;
 function nextModel() {
@@ -174,8 +174,8 @@ function nextModel() {
   return m;
 }
 const MODEL = {
-  ocr:      'nvidia/nemotron-nano-12b-v2-vl:free',
-  analysis: 'nvidia/nemotron-nano-12b-v2-vl:free', // 메인: OCR 특화
+  ocr:      'google/gemma-4-26b-a4b-it:free',
+  analysis: 'google/gemma-4-26b-a4b-it:free',    // MoE, 빠름 (타임아웃 방지)
   fallback: 'google/gemma-4-31b-it:free',
 };
 
