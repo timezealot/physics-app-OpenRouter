@@ -51,7 +51,10 @@ textarea::placeholder{color:var(--text3)}
   </div>
   <div class="api-wrap">
     <button id="mockToggle" class="btn" onclick="toggleMock()">🧪 목업 OFF</button>
-    <input class="api-input" type="password" id="apiKey" placeholder="sk-or-v1-... (OpenRouter)">
+    <div style="display:flex;flex-direction:column;gap:3px;align-items:flex-end">
+      <textarea id="apiKey" rows="2" style="width:260px;font-family:'JetBrains Mono',monospace;font-size:10px;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--surface2);color:var(--text);resize:none;line-height:1.5" placeholder="sk-or-v1-키1&#10;sk-or-v1-키2 (여러 키 줄바꿈으로 입력)"></textarea>
+      <span id="keyStatus" style="font-size:10px;color:var(--text3)">키 0개</span>
+    </div>
   </div>
 </div>
 <div id="mockBanner" style="display:none;background:#fef3c7;border-bottom:1px solid #fde68a;padding:8px 20px;text-align:center;font-size:12px;color:#92400e;font-weight:600;">🧪 목업 모드 — 실제 API 호출 없이 샘플 결과를 생성합니다</div>
@@ -124,11 +127,45 @@ let isAnalyzing = false;
 let lastRenderedHtml = '';
 let lastAnalysisJson = null;
 
-// 문제마다 다른 모델 사용 → 각 모델 RPM 분산 (2026년 5월 기준)
+let apiKeyPool = [];   // 파싱된 키 목록
+let apiKeyIdx  = 0;    // 현재 키 인덱스
+let exhaustedKeys = new Set(); // 한도 소진된 키
+
+function parseApiKeys() {
+  const raw = document.getElementById('apiKey').value;
+  apiKeyPool = raw.split(/[\n,;]+/).map(s=>s.trim()).filter(s=>s.startsWith('sk-'));
+  apiKeyIdx = 0;
+  exhaustedKeys.clear();
+  const el = document.getElementById('keyStatus');
+  if(el) el.textContent = `키 ${apiKeyPool.length}개`;
+  return apiKeyPool;
+}
+
+function getNextApiKey() {
+  const available = apiKeyPool.filter(k => !exhaustedKeys.has(k));
+  if (!available.length) return null; // 전부 소진
+  const idx = apiKeyIdx % available.length;
+  apiKeyIdx++;
+  return available[idx];
+}
+
+function markKeyExhausted(key) {
+  exhaustedKeys.add(key);
+  const el = document.getElementById('keyStatus');
+  const available = apiKeyPool.filter(k => !exhaustedKeys.has(k));
+  if(el) el.textContent = `키 ${available.length}/${apiKeyPool.length}개 사용 가능`;
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const el = document.getElementById('apiKey');
+  if(el) el.addEventListener('input', parseApiKeys);
+});
+
 const MODEL_POOL = [
-  'google/gemma-4-26b-a4b-it:free',   // MoE, 빠름, 비전 지원 확인
-  'google/gemma-4-31b-it:free',        // 31B dense, 비전 지원 확인
-  'openrouter/free',                   // 자동 선택 fallback
+  'nvidia/nemotron-nano-12b-v2-vl:free', // 메인: OCRBench v2 1위, 손글씨/수식 인식 특화
+  'google/gemma-4-26b-a4b-it:free',    // fallback1
+  'google/gemma-4-31b-it:free',        // fallback2
+  'openrouter/free',                   // 최후 fallback
 ];
 let modelPoolIdx = 0;
 function nextModel() {
@@ -137,8 +174,8 @@ function nextModel() {
   return m;
 }
 const MODEL = {
-  ocr:      'google/gemma-4-26b-a4b-it:free',
-  analysis: 'google/gemma-4-26b-a4b-it:free', // 첫 문제 기본값 (실제론 nextModel() 사용)
+  ocr:      'nvidia/nemotron-nano-12b-v2-vl:free',
+  analysis: 'nvidia/nemotron-nano-12b-v2-vl:free', // 메인: OCR 특화
   fallback: 'google/gemma-4-31b-it:free',
 };
 
@@ -154,7 +191,6 @@ const MOCK_JSON = {
   ],
   total:{strengths:'해설의 기준점 개념은 파악하려는 시도가 보입니다.',weaknesses:'그림에 있는 힘 요소를 빠뜨리면 전체 풀이가 흔들립니다.',study_direction:'힘 목록 → 거리 목록 → 식 설정 순서로 정리하세요.'}
 };
-
 
 const SYSTEM_DIRECT = `You are a Korean high school physics teacher grading student homework written in Korean.
 CRITICAL OUTPUT RULES:
@@ -277,7 +313,6 @@ function renderPreviews(key){
 function openLightbox(src){document.getElementById('lightboxImg').src=src;document.getElementById('lightbox').classList.add('open');}
 function closeLightbox(){document.getElementById('lightbox').classList.remove('open');}
 function goBack(){ isAnalyzing=false; document.getElementById('analyzeBtn').disabled=false;
-  // 정답/학생선택 초기화 (이전 값 잔류로 정오답 오판 방지)
   Object.keys(correctAnswers).forEach(k=>delete correctAnswers[k]);
   Object.keys(studentAnswers).forEach(k=>delete studentAnswers[k]);
   initAnswerUI();
@@ -289,7 +324,6 @@ function goBack(){ isAnalyzing=false; document.getElementById('analyzeBtn').disa
 function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
 function escapeHtml(s=''){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function fixLatex(s=''){
-  // OCR이 LaTeX로 출력한 경우 일반 텍스트로 변환
   let r=String(s);
   r=r.replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g,'($1)/($2)');
   r=r.replace(/\\times/g,'×');r=r.replace(/\\cdot/g,'·');
@@ -309,33 +343,28 @@ function renderItalic(s=''){
   return r;
 }
 
-// <sub>,<sup>,*이탤릭*,**볼드**를 모두 살려서 렌더링
 function renderSafe(s=''){
   if(!s) return '-';
   let r = String(s);
   const PH = (i) => `\x00${i}\x00`;
   const store = [];
-  // 허용 태그 보호
   const protect = (re, tag) => { r = r.replace(re, (m) => { store.push(m); return PH(store.length-1); }); };
   protect(/<sub>[^<]*<\/sub>/gi, 'sub');
   protect(/<sup>[^<]*<\/sup>/gi, 'sup');
   protect(/<br\s*\/?>/gi, 'br');
-  // 마크다운 → 임시 플레이스홀더
   r = r.replace(/\*\*([^*]+)\*\*/g, (m,t) => { store.push('<strong>'+t+'</strong>'); return PH(store.length-1); });
   r = r.replace(/\*([^*\n]+)\*/g,   (m,t) => { store.push('<em>'+t+'</em>'); return PH(store.length-1); });
-  // HTML escape
   r = r.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  // 플레이스홀더 복원
   r = r.replace(/\x00(\d+)\x00/g, (m,i) => store[parseInt(i)]);
   return r;
 }
-function safeText(s){return (s||'').toString().trim();}
-function normalizeText(s=''){return s.replace(/\s+/g,' ').replace(/[,:]/g,' ').replace(/[()\[\]{}]/g,' ').replace(/→/g,'=').trim();}
-function normalizeFormula(s=''){return normalizeText(s).replace(/\s/g,'').replace(/\*|·/g,'×').replace(/[−–—]/g,'-').replace(/=/g,'=').replace(/([^0-9A-Za-z가-힣τΣμθ①②③④⑤])/g, m=>m).trim();}
-function normalizeEquation(eq=''){return normalizeFormula(eq).split('=').filter(Boolean).sort().join('=');}
-function extractMathTokens(s=''){const t=normalizeFormula(s); const matches=t.match(/[A-Za-z]+|\d+(?:\.\d+)?|Σ|τ|μ|θ|①|②|③|④|⑤|[=+\-×/]/g); return matches||[];}
-function jaccard(a,b){const A=new Set(a), B=new Set(b); if(!A.size&&!B.size) return 1; let inter=0; A.forEach(x=>{if(B.has(x)) inter++;}); return inter/(A.size+B.size-inter||1);}
-function containsAny(hay, needles){const h=normalizeFormula(hay); return needles.some(n=>n && h.includes(normalizeFormula(n)));}
+const safeText=s=>(s||'').toString().trim();
+const normalizeText=s=>s.replace(/\s+/g,' ').replace(/[,:]/g,' ').replace(/[(){}\[\]]/g,' ').replace(/→/g,'=').trim();
+const normalizeFormula=s=>normalizeText(s).replace(/\s/g,'').replace(/\*|·/g,'×').replace(/[−–—]/g,'-').trim();
+const normalizeEquation=eq=>normalizeFormula(eq).split('=').filter(Boolean).sort().join('=');
+const extractMathTokens=s=>(normalizeFormula(s).match(/[A-Za-z]+|\d+(?:\.\d+)?|[Στμθ①-⑤=+\-×/]/g)||[]);
+const jaccard=(a,b)=>{const A=new Set(a),B=new Set(b);if(!A.size&&!B.size)return 1;let i=0;A.forEach(x=>{if(B.has(x))i++;});return i/(A.size+B.size-i||1);};
+const containsAny=(hay,needles)=>{const h=normalizeFormula(hay);return needles.some(n=>n&&h.includes(normalizeFormula(n)));};
 
 function calcSimilarity(solutionText, studentText, solutionDrawing='', studentDrawing=''){
   const solTokens=extractMathTokens(solutionText+' '+solutionDrawing);
@@ -373,19 +402,14 @@ function applyWeightedScores(problem){
   const userStudent=studentAnswers[p.number];
   if(userAnswer) p.answer=userAnswer;
   if(userAnswer&&userStudent){
-    // 정답 일치 여부는 입력값 기준으로만 판단
-    // AI가 이미 판정했으면 존중, 없으면 기본값
     const isCorrect = userAnswer===userStudent;
     if(!p.judgement || p.judgement==='입력 필요'){
       p.judgement = isCorrect ? '풀이가 다름' : '오류 있음';
     } else if(!isCorrect && p.judgement==='일치'){
-      // AI가 일치라 했지만 정답이 다르면 오류로 교정
       p.judgement = '오류 있음';
     } else if(isCorrect && p.judgement==='오류 있음'){
-      // AI가 오류라 했지만 정답이 맞으면 풀이가 다름으로 완화
       p.judgement = '풀이가 다름';
     }
-    // 정답 맞고 AI도 일치 판정 → 그대로 유지
     p.student_summary = p.student_summary || {};
     p.student_summary.final_answer = userStudent;
   } else if (!p.judgement) {
@@ -398,7 +422,6 @@ function applyWeightedScores(problem){
 
   let concept=baseConcept, process=baseProcess, interpret=baseInterpret;
   if(p.judgement==='오류 있음'){
-    // 직접 분석 모드: AI가 이미 판단한 점수를 최대한 존중. 최소 1점 보장
     concept=Math.max(1,baseConcept-band.penalty);
     process=Math.max(1,baseProcess-(band.penalty+1));
     interpret=Math.max(1,baseInterpret-(p.student_summary?.drawing&&p.student_summary?.drawing!=='없음'?Math.max(1,band.penalty-1):band.penalty));
@@ -415,9 +438,6 @@ function applyWeightedScores(problem){
   const solutionLen=normalizeText(solutionText).length;
   const studentLen=normalizeText(studentText).length + normalizeText(p.student_summary?.drawing||'').length;
   const hasCoreEquation = extractMathTokens(p.student_summary?.equation||'').length >= 3;
-  // 이미지 직접 분석 모드: AI가 이미지를 보고 직접 판단하므로
-  // 텍스트 유사도(sim)만으로 분석 제외하지 않음 — AI 판단을 신뢰
-  // 이미지 분석 자체 실패한 경우만 제외
   const isAnalysisFailed = !!(p.solution_steps||[]).some(s => s.includes('분석 실패') || s.includes('이미지 분석 실패')) || p.judgement==='분석 제외';
   const hasSolutionText = (p.solution_steps||[]).some(s => s.length > 5 && !s.includes('분석 실패') && !s.includes('이미지 분석 실패'));
   const lowConfidence = sim < 0.45 && solutionLen < 20 && studentLen < 10 && !hasSolutionText;
@@ -451,29 +471,41 @@ function applyWeightedScores(problem){
 }
 
 function buildReason(kind,p,sim,base=''){
-  const sol=(p.solution_steps||[]).join(' / ');
-  const stuEq=p.student_summary?.equation||'';
-  const stuCalc=p.student_summary?.calculation||'';
-  const drawing=p.student_summary?.drawing||'';
-  if(p.judgement==='분석 제외') return '비교 근거가 부족해 점수를 산정하지 않았습니다.';
-  if(kind==='개념'){
-    if(p.judgement==='일치') return '해설 핵심 식과 학생 식의 일치도가 높고 핵심 개념 적용이 안정적입니다.';
-    if(p.judgement==='풀이가 다름') return `해설 핵심 식과 학생 식이 부분적으로만 겹칩니다. 유사도 ${Math.round(sim*100)}% 수준입니다.`;
-    return `해설 식 "${trimForReason(sol)}"과 학생 식 "${trimForReason(stuEq||stuCalc)}"이 충분히 맞지 않아 개념 적용에 오류가 있습니다.`;
-  }
-  if(kind==='전개'){
-    if(p.judgement==='일치') return '식 설정에서 계산 결론까지 흐름이 해설과 거의 같습니다.';
-    if(p.judgement==='풀이가 다름') return `식 일부는 맞지만 계산 전개가 해설과 달라 점수 가중 감점을 적용했습니다. 유사도 ${Math.round(sim*100)}%.`;
-    return `해설 전개와 학생 계산 "${trimForReason(stuCalc)}"이 다르므로 전개 점수를 낮췄습니다.`;
-  }
-  if(p.judgement==='일치') return '그림, 기준점, 거리 정보를 비교적 안정적으로 읽었습니다.';
-  if(drawing && drawing!=='없음') return `학생 그림/도형 "${trimForReason(drawing)}"은 읽혔지만 해설의 핵심 요소와 완전히 맞지는 않았습니다.`;
-  return '그림 또는 조건 해석 근거가 부족하거나 해설의 핵심 요소와 다릅니다.';
+  if(base && base.length>5) return base;
+  const j=p.judgement, s=Math.round(sim*100);
+  const sol=trimForReason((p.solution_steps||[]).join(' / '));
+  const stuEq=trimForReason(p.student_summary?.equation||p.student_summary?.calculation||'');
+  if(j==='분석 제외') return '비교 근거 부족으로 산정하지 않았습니다.';
+  const tbl={
+    '개념':{
+      '일치':'해설 핵심 식과 학생 식 일치도가 높고 개념 적용이 안정적입니다.',
+      '풀이가 다름':`해설과 학생 식이 부분적으로 겹칩니다. 유사도 ${s}%.`,
+      '오류 있음':`해설 "${sol}"과 학생 "${stuEq}"이 맞지 않아 개념 오류가 있습니다.`
+    },
+    '전개':{
+      '일치':'식 설정부터 계산 결론까지 흐름이 해설과 같습니다.',
+      '풀이가 다름':`일부 식은 맞지만 전개가 달라 감점했습니다. 유사도 ${s}%.`,
+      '오류 있음':`학생 계산 "${stuEq}"이 해설과 달라 전개 점수를 낮췄습니다.`
+    },
+    '해석':{
+      '일치':'그림·기준점·조건 해석이 해설과 일치합니다.',
+      '풀이가 다름':'일부 해석이 해설과 다릅니다.',
+      '오류 있음':'조건 해석 근거가 해설의 핵심 요소와 다릅니다.'
+    }
+  };
+  return (tbl[kind]||{})[j] || (tbl[kind]||{})['오류 있음'] || '';
 }
 function trimForReason(s=''){s=safeText(s); return s.length>42?s.slice(0,42)+'…':s;}
 
-async function callProxy({parts, system='', model=MODEL.ocr, attempt=0, setMsgFn=null}){
-  const apiKey=document.getElementById('apiKey').value.trim();
+async function callProxy({parts, system='', model=MODEL.ocr, attempt=0, setMsgFn=null, _usedKey=null}){
+  let apiKey;
+  if(apiKeyPool.length > 0){
+    apiKey = attempt > 0 ? getNextApiKey() : (getNextApiKey() || document.getElementById('apiKey').value.trim());
+  } else {
+    apiKey = document.getElementById('apiKey').value.trim();
+  }
+  if(!apiKey) throw new Error('사용 가능한 API 키가 없습니다. 키를 입력해주세요.');
+  const _currentKey = apiKey;
   const activeModel = (attempt>=1) ? MODEL_POOL[(modelPoolIdx+attempt) % MODEL_POOL.length] : model;
   const res=await fetch('/api/proxy',{
     method:'POST',
@@ -492,7 +524,6 @@ async function callProxy({parts, system='', model=MODEL.ocr, attempt=0, setMsgFn
       || msg.toLowerCase().includes('high demand')
       || msg.toLowerCase().includes('unavailable');
 
-    // 503 과부하: 1번만 30초 대기 후 재시도 (무료 서버 혼잡)
     if(isOverload && attempt < 1){
       const waitMsg=`⏳ OpenRouter 서버 일시 오류 — 15초 후 재시도합니다...`;
       if(setMsgFn) setMsgFn(waitMsg);
@@ -501,9 +532,7 @@ async function callProxy({parts, system='', model=MODEL.ocr, attempt=0, setMsgFn
       return callProxy({parts, system, model, attempt:attempt+1, setMsgFn});
     }
 
-    // 429 할당량 처리
     if(isQuota){
-      // 일일 한도 여부 확인
       let parsed429 = {};
       try { parsed429 = JSON.parse(raw); } catch {}
       const isDailyLimit = parsed429.isDailyLimit ||
@@ -513,13 +542,22 @@ async function callProxy({parts, system='', model=MODEL.ocr, attempt=0, setMsgFn
         retryAfter > 3600;
 
       if(isDailyLimit){
-        throw new Error('오늘 무료 사용량(200회)을 모두 소진했습니다.\n내일 자정(UTC, 한국 오전 9시)에 초기화됩니다.');
+        if(_currentKey) markKeyExhausted(_currentKey);
+        const nextKey = getNextApiKey();
+        if(nextKey){
+          const available = apiKeyPool.filter(k=>!exhaustedKeys.has(k)).length;
+          const switchMsg = `⚡ 키 한도 소진 → 다른 키로 자동 전환 (남은 키 ${available}개)`;
+          if(setMsgFn) setMsgFn(switchMsg);
+          else{const el=document.getElementById('loadingText'); if(el) el.innerHTML=switchMsg;}
+          await sleep(1000);
+          return callProxy({parts, system, model, attempt:attempt+1, setMsgFn, _usedKey:nextKey});
+        }
+        throw new Error('모든 API 키의 오늘 사용량이 소진됐습니다.\n새 계정 키를 추가하거나 내일(한국 오전 9시) 다시 시도해 주세요.');
       }
 
-      // RPM 초과: 1번만 대기 후 재시도
-      if(attempt < 1){
+      if(attempt < 2){
         const wait=Math.min(retryAfter, 70);
-        const waitMsg=`⏳ 분당 요청 한도 — ${wait}초 대기 후 다른 모델로 재시도...`;
+        const waitMsg=`⏳ 분당 요청 한도 — ${wait}초 대기 후 재시도...`;
         if(setMsgFn) setMsgFn(waitMsg);
         else{const el=document.getElementById('loadingText'); if(el) el.innerHTML=waitMsg;}
         await sleep(wait*1000);
@@ -533,30 +571,18 @@ async function callProxy({parts, system='', model=MODEL.ocr, attempt=0, setMsgFn
   }
   try{
     const j=JSON.parse(raw);
-    // OpenRouter(OpenAI 호환): choices[0].message.content
     if(j.choices?.[0]?.message?.content !== undefined) return j.choices[0].message.content.trim();
-    // Anthropic 형식 fallback: content 배열
     if(Array.isArray(j.content)) return j.content.map(c=>c.text||'').join('').trim();
     return raw.trim();
   }catch{return raw.trim();}
 }
 
-// 해설용 2패스 OCR: 1패스(수식/숫자) + 2패스(그림/화살표) 결과 합산
-
-// ══════════════════════════════════════════════
-// 2×2 자동 Crop 시스템
-// ══════════════════════════════════════════════
-
-// 이미지를 Gemini로 보내 2×2 grid 좌표 탐지
 async function detectGridCoords(file) {
-  // Canvas 픽셀 분석으로 실제 여백 경계선을 찾아 분할
-  // 50% 고정 대신 밝기 기반으로 정확한 분할선 탐지
   return new Promise(resolve => {
     const img = new Image();
     img.onload = () => {
       const W = img.width, H = img.height;
       const canvas = document.createElement('canvas');
-      // 분석용으로 크기 축소 (속도)
       const scale = Math.min(1, 400 / Math.max(W, H));
       canvas.width  = Math.round(W * scale);
       canvas.height = Math.round(H * scale);
@@ -565,7 +591,6 @@ async function detectGridCoords(file) {
       const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
       const sw = canvas.width, sh = canvas.height;
 
-      // 각 행/열의 평균 밝기 계산
       const rowBrightness = new Float32Array(sh);
       const colBrightness = new Float32Array(sw);
       for (let y = 0; y < sh; y++) {
@@ -585,7 +610,6 @@ async function detectGridCoords(file) {
         colBrightness[x] = sum / sh;
       }
 
-      // 중간 30~70% 구간에서 가장 밝은 여백선 찾기
       function findSplit(brightness, size) {
         const start = Math.floor(size * 0.30);
         const end   = Math.ceil(size * 0.70);
@@ -599,7 +623,6 @@ async function detectGridCoords(file) {
       const splitY = findSplit(rowBrightness, sh);
       const splitX = findSplit(colBrightness, sw);
 
-      // 분할값이 너무 치우치면 50%로 보정 (이미지가 여백 없이 꽉 찬 경우)
       const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
       resolve({
         cols: [0.0, clamp(splitX, 0.40, 0.60)],
@@ -611,8 +634,6 @@ async function detectGridCoords(file) {
   });
 }
 
-// Canvas로 이미지를 grid에 맞게 잘라 file 객체 배열로 반환
-// 반환 순서: [좌상(1번), 우상(2번), 좌하(3번), 우하(4번)]  ← 문제지 배치 기준
 async function cropImageToGrid(file, coords) {
   if (file.isPdf) return [file]; // PDF는 crop 불가
 
@@ -622,11 +643,9 @@ async function cropImageToGrid(file, coords) {
       const W = img.width, H = img.height;
       const {cols, rows} = coords;
 
-      // col/row 비율 → 픽셀 경계값
       const xCuts = [...cols.map(c => Math.round(c * W)), W];
       const yCuts = [...rows.map(r => Math.round(r * H)), H];
 
-      // 열 우선 순서: 좌상(1번)→우상(2번)→좌하(3번)→우하(4번) [ci 먼저 루프]
       const cropped = [];
       for (let ci = 0; ci < xCuts.length - 1; ci++) {
         for (let ri = 0; ri < yCuts.length - 1; ri++) {
@@ -652,13 +671,10 @@ async function cropImageToGrid(file, coords) {
   });
 }
 
-// 해설 텍스트에서 문제 번호 배열 추출
-// "[문제 5]", "5번 문제", "문제5", "5번:", "19." 같은 패턴 인식
 function parseNumbersFromSolutionText(text) {
   if (!text || !text.trim()) return null;
   const nums = new Set();
 
-  // "[문제 5]", "[5번]", "문제 5", "5번 문제" 패턴
   const patterns = [
     /\[문제\s*(\d+)\]/g,
     /\[(\d+)번\]/g,
@@ -675,10 +691,6 @@ function parseNumbersFromSolutionText(text) {
   return [...nums].sort((a, b) => a - b);
 }
 
-
-// 파일 배열 전체를 grid crop → 문제 번호 순으로 평탄화
-// rangeNumbers가 있으면 순서대로 실제 번호 배정 (API 오인식 방지)
-// rangeNumbers가 없으면 1,2,3... 순번 배정 후 analyze에서 allNums 기준 필터
 async function autoCropFiles(files, setMsg, label, rangeNumbers) {
   if (!files.length) return [];
 
@@ -707,7 +719,6 @@ async function autoCropFiles(files, setMsg, label, rangeNumbers) {
   return allCropped;
 }
 
-// crop 배열을 번호 기준으로 정렬하고 번호→file 맵 생성
 function buildNumberMap(croppedArr) {
   const map = {};
   croppedArr.forEach(({number, file}) => {
@@ -716,36 +727,28 @@ function buildNumberMap(croppedArr) {
   return map;
 }
 
-
 async function compressImage(file, mode='solution'){
   if(file.isPdf) return file;
   return new Promise(resolve=>{
     const img=new Image();
     img.onload=()=>{
-      // crop된 이미지는 이미 작으므로 최소 크기 보장 (업스케일)
-      // 해설: 필터 없이 원본 색상 유지 (빨간 첨삭, 색깔 강조 보존)
-      // 학생: 대비 강화로 흐린 손글씨 살리기
       const MIN = 800; // 최소 보장 크기
-      const MAX = mode==='student' ? 1600 : 1400; // 손글씨 인식률 우선 (크기 줄이면 뭉개짐)
+      const MAX = mode==='student' ? 1800 : 1600; // Nemotron OCR: 고해상도 권장
       let w=img.width, h=img.height;
-      // 너무 작으면 upscale
       if(w<MIN && h<MIN){
         const scale = MIN / Math.max(w, h);
         w=Math.round(w*scale); h=Math.round(h*scale);
       }
-      // 너무 크면 downscale
       if(w>MAX||h>MAX){ if(w>h){h=Math.round(h*MAX/w);w=MAX;} else {w=Math.round(w*MAX/h);h=MAX;} }
       const canvas=document.createElement('canvas'); canvas.width=w; canvas.height=h;
       const ctx=canvas.getContext('2d');
       if(mode==='student'){
-        // 손글씨: grayscale 제거 → 색상 보존 + 대비만 강화 (빨간 첨삭 등 색깔 정보 유지)
-        ctx.filter='contrast(140%) brightness(105%)';
+        ctx.filter='contrast(180%) brightness(92%) saturate(110%)';
       } else {
-        // 해설: 필터 없이 원본 그대로 (색깔 정보 보존)
         ctx.filter='none';
       }
       ctx.drawImage(img,0,0,w,h);
-      const quality = mode==='student' ? 0.97 : 0.93; // 학생 손글씨: 최고 화질
+      const quality = mode==='student' ? 0.99 : 0.94; // 손글씨 OCR 최고 화질
       resolve({...file, base64:canvas.toDataURL('image/jpeg',quality).split(',')[1], mediaType:'image/jpeg'});
     };
     img.onerror=()=>resolve({...file}); // 로드 실패 시 원본 그대로 반환
@@ -753,32 +756,22 @@ async function compressImage(file, mode='solution'){
   });
 }
 
-
 function robustJsonParse(text){
-  // 디버그: 콘솔에 raw 응답 출력 (파싱 실패 원인 추적용)
-  console.log('[분석 raw 응답]', text.slice(0, 800));
 
-  // 1) 있는 그대로 파싱
   try{return JSON.parse(text);}catch{}
 
-  // 2) 마크다운 코드펜스 전체 제거 (멀티라인 포함)
   let t2 = text.replace(/```(?:json)?/gi,'').replace(/```/g,'').replace(/^`+|`+$/gm,'').trim();
   try{return JSON.parse(t2);}catch{}
 
-  // 3) 첫 { 부터 마지막 } 까지 슬라이스
   const s=text.indexOf('{'), e=text.lastIndexOf('}');
   if(s!==-1 && e>s){
     const slice=text.slice(s,e+1);
-    // 3a) 슬라이스 직접 파싱
     try{return JSON.parse(slice);}catch{}
-    // 3b) 탭·LF 외 제어문자 제거
     try{return JSON.parse(slice.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g,' '));}catch{}
-    // 3c) 문자열 값 안의 raw 줄바꿈을 \n 으로 이스케이프
     try{
       const fixed=slice.replace(/"((?:[^"\\]|\\.)*)"/g,(_,inner)=>'"'+inner.replace(/\n/g,'\\n').replace(/\r/g,'\\r').replace(/\t/g,'\\t')+'"');
       return JSON.parse(fixed);
     }catch{}
-    // 3d) 전체 제어문자 강제 제거
     try{return JSON.parse(slice.replace(/[\x00-\x1F\x7F]/g,' '));}catch{}
   }
 
@@ -786,11 +779,11 @@ function robustJsonParse(text){
   throw new Error('분석 결과 JSON 파싱에 실패했습니다. (AI 응답 형식 오류 — 다시 시도해 주세요)');
 }
 
-
 async function analyze(){
   if(isAnalyzing) return;
   const apiKey=document.getElementById('apiKey').value.trim();
-  if(!isMock && !apiKey){ alert('API Key를 입력해주세요.'); return; }
+  parseApiKeys();
+  if(!isMock && apiKeyPool.length===0){ alert('API Key를 입력해주세요.\n(sk-or-v1-... 형식, 여러 개는 줄바꿈으로 구분)'); return; }
   const qT=document.getElementById('text-q').value.trim();
   const aT=document.getElementById('text-a').value.trim();
   const sT=document.getElementById('text-s').value.trim();
@@ -799,6 +792,7 @@ async function analyze(){
   }
 
   isAnalyzing=true;
+  parseApiKeys(); // 분석 시작 시 키 목록 최신화
   document.getElementById('analyzeBtn').disabled=true;
   document.getElementById('inputView').style.display='none';
   document.getElementById('bottomBar').style.display='none';
@@ -841,11 +835,9 @@ async function analyze(){
       finishRender(data,rc); return;
     }
 
-    // ── Step 1: 이미지 crop ──
     setMsg('이미지 구역 분석 중...<br><span class="small muted">2×2 격자를 찾아 문제별로 분할합니다</span>', 5);
     setLabel('준비 중');
 
-    // 번호 우선순위: 해설 텍스트 → null(순번 배정)
     const rangeNumbers =
       parseNumbersFromSolutionText(aT) ||
       null;
@@ -859,13 +851,10 @@ async function analyze(){
     const stuMap = buildNumberMap(stuCropped);
     const qMap   = buildNumberMap(qCropped);
 
-    // 해설과 학생풀이 교집합 기준으로 분석 (문제지 이미지가 없어도 OK)
-    // rangeNumbers가 있으면 그것만, 없으면 solMap ∩ stuMap (또는 둘 중 하나라도 있는 것)
     let allNums;
     if (rangeNumbers) {
       allNums = rangeNumbers.filter(n => solMap[n] || stuMap[n] || qMap[n]);
     } else {
-      // sol과 stu 모두 있는 번호 우선, 없으면 각각 union
       const solNums = Object.keys(solMap).map(Number);
       const stuNums = Object.keys(stuMap).map(Number);
       const qNums = Object.keys(qMap).map(Number);
@@ -879,7 +868,6 @@ async function analyze(){
     const maxProblems = allNums.length || 1;
     setLabel(`총 ${maxProblems}문제 감지됨`);
 
-    // ── Step 2: 문제별 분석 ──
     const problemResults=[];
 
     for(let i=0; i<allNums.length; i++){
@@ -918,7 +906,6 @@ async function analyze(){
         parts.push({type:'text',text:`[학생 풀이 이미지 — ${probNum}번]`});
         parts.push({type:'image',source:{type:'base64',media_type:stf.mediaType,data:stf.base64}});
       } else if(stuCropped.length>0 && !sT){
-        // 번호 매핑 실패 시: 전체 학생 풀이 이미지에서 해당 순번 조각 사용
         const fallbackIdx = allNums.indexOf(probNum);
         const fallbackFile = stuCropped[fallbackIdx]?.file || stuCropped[0]?.file;
         if(fallbackFile){
@@ -928,7 +915,6 @@ async function analyze(){
         }
       } else if(sT){ parts.push({type:'text',text:`[학생 풀이 텍스트]\n${sT}`}); }
 
-      // 실질 분석 가능 여부 확인 (이미지나 텍스트가 최소 1개 있어야 함)
       const hasContent = parts.some(p => p.type==='image') || parts.some(p => p.type==='text' && (p.text||'').length > 50);
       if(!hasContent){
         console.warn(`문제 ${probNum}: 분석할 내용 없음 (이미지/텍스트 모두 없음), 건너딧`);
@@ -957,16 +943,19 @@ async function analyze(){
             const steps=candidate.solution_steps||[];
             const hasEq=steps.some(s=>s.includes('='));
             const tooFew=steps.length<2 && !!solMap[probNum];
-            // 학생 풀이 인식 실패 감지
             const stu=candidate.student_summary||{};
             const stuEmpty = [stu.equation,stu.calculation,stu.drawing,stu.final_answer]
               .every(v=>!v||v==='-'||v==='없음'||v.trim()==='');
             const stuHasImage = !!stuMap[probNum];
-            const needRetry = ((!hasEq && tooFew) || (stuEmpty && stuHasImage)) && retry===0;
+            // 재시도 조건:
+            // 1. 해설 파싱 불량 (해설 이미지가 있는데 수식이 없는 경우)
+            // 2. 학생 풀이 이미지가 있는데 빈값으로 나온 경우 (이미지 없으면 재시도 무의미)
+            const shouldRetryForSol = !hasEq && tooFew && !!solMap[probNum];
+            const shouldRetryForStu = stuEmpty && stuHasImage && !!stuMap[probNum]; // 실제 매핑된 이미지 있을 때만
+            const needRetry = (shouldRetryForSol || shouldRetryForStu) && retry===0;
             if(needRetry){
-              console.warn(`문제 ${probNum} 인식 품질 불량(해설부족:${!hasEq&&tooFew}, 학생풀이없음:${stuEmpty&&stuHasImage}), 재시도...`);
-              setMsg(`문제 ${probNum} 재시도 중...<br><span class="small muted">손글씨 재인식 중입니다</span>`,pct);
-              await sleep(4000);
+              setMsg(`문제 ${probNum} 재시도 중...<br><span class="small muted">다른 모델로 재인식합니다</span>`,pct);
+              await sleep(3000);
               raw=await callProxy({parts,system:SYSTEM_DIRECT,model:nextModel()});
               continue;
             }
@@ -994,52 +983,9 @@ async function analyze(){
       if(i<allNums.length-1) await sleep(4000); // OR 무료 20RPM 기준
     }
 
-    // ── Step 3: 구조화된 총평 ──
-    await sleep(4000); // OR 무료 20RPM 기준
-    setMsg('총평 생성 중...<br><span class="small muted">패턴 분석 및 맞춤 학습 방향을 작성합니다</span>', 90);
+    setMsg('총평 생성 중...<br><span class="small muted">분석 결과를 종합합니다</span>', 92);
     setLabel('총평 작성 중');
-
-    const summaryParts=[{type:'text',text:
-      `아래는 ${maxProblems}개 문제에 대한 학생 분석 결과입니다.
-${JSON.stringify(problemResults)}
-
-위 결과를 분석하여 아래 JSON 형식으로 학생 맞춤 총평을 출력하세요.
-첫 글자는 반드시 {. 마크다운 펜스 금지.
-
-{
-  "total": {
-    "strengths": "잘한 점 2~3가지. 구체적 문제번호와 실제 식 인용.",
-    "weaknesses": "부족한 점 2~3가지. 구체적 문제번호와 실제 식 인용.",
-    "study_direction": "우선 학습 방향 2~3가지.",
-    "error_patterns": [
-      {"type": "오류 유형명 (부호 오류/조건 누락/개념 오류/계산 실수/식 설정 오류 중 택1)", "count": 발생횟수, "problems": [문제번호], "detail": "구체적 설명 한 문장"}
-    ],
-    "weak_concepts": ["취약 물리 개념1", "취약 물리 개념2"],
-    "level": "상|중상|중|중하|하",
-    "level_reason": "수준 판단 근거 한 문장",
-    "next_steps": [
-      {"priority": 1, "action": "구체적 학습 행동. 추상 표현 금지."},
-      {"priority": 2, "action": "..."},
-      {"priority": 3, "action": "..."}
-    ]
-  }
-}
-
-규칙:
-- error_patterns: 같은 유형 오류 반복 시만 포함. 없으면 []
-- weak_concepts: 오류 문제 공통 취약 개념. 없으면 []
-- level 기준: 평균 25점 이상=상, 20~24=중상, 15~19=중, 10~14=중하, 10 미만=하
-- 분석 제외 문제는 점수 계산 제외`
-    }];
-    let totalData={strengths:'',weaknesses:'',study_direction:'',error_patterns:[],weak_concepts:[],level:'중',level_reason:'',next_steps:[]};
-    try{
-      const tRaw=await callProxy({parts:summaryParts,system:'JSON만 출력. 첫 글자는 {. 마크다운 펜스 금지.',model:nextModel()});
-      const tp=robustJsonParse(tRaw);
-      totalData=tp.total||tp;
-    }catch(e){
-      console.warn('총평 실패',e);
-      totalData.strengths='총평 생성에 실패했습니다. 문제별 피드백을 참고해 주세요.';
-    }
+    const totalData = generateSummary(problemResults);
 
     const finalData={problems:problemResults,total:totalData};
     setMsg('완료!', 100);
@@ -1057,6 +1003,94 @@ ${JSON.stringify(problemResults)}
   }
 }
 
+function generateSummary(problems) {
+  const active = problems.filter(p => p.judgement !== '분석 제외');
+  const errProbs = active.filter(p => p.judgement === '오류 있음');
+  const diffProbs = active.filter(p => p.judgement === '풀이가 다름');
+  const okProbs = active.filter(p => p.judgement === '일치');
+
+  // 평균 점수
+  const avg = key => active.length
+    ? (active.reduce((s,p)=>s+(p.scores?.[key]||0),0)/active.length).toFixed(1)
+    : 0;
+  const avgTotal = active.length
+    ? (active.reduce((s,p)=>s+((p.scores?.concept||0)+(p.scores?.process||0)+(p.scores?.interpretation||0)),0)/active.length).toFixed(1)
+    : 0;
+
+  // 수준 판정
+  const t = parseFloat(avgTotal);
+  const level = t>=25?'상':t>=20?'중상':t>=15?'중':t>=10?'중하':'하';
+  const levelReason = `분석된 ${active.length}문제의 평균 점수가 ${avgTotal}점으로, ${
+    level==='상'?'물리 개념 이해 및 문제 해결 능력이 우수합니다':
+    level==='중상'?'개념 이해도는 높으나 일부 문제에서 개념 적용에 어려움이 있습니다':
+    level==='중'?'기본 개념 이해는 되나 응용과 계산 전개에서 개선이 필요합니다':
+    level==='중하'?'기본 물리 개념 이해 및 문제 풀이 전반에 걸쳐 개선이 필요합니다':
+    '물리 기초 개념부터 체계적인 학습이 필요합니다'}.`;
+
+  // 강점
+  const strengths = okProbs.length > 0
+    ? okProbs.map(p => {
+        const fb = p.feedback?.evaluation || '';
+        return `${p.number}번: ${fb.slice(0,60)}${fb.length>60?'…':''}`;
+      }).join(' / ')
+    : (diffProbs.length > 0
+        ? `${diffProbs.map(p=>p.number+'번').join(', ')}에서 최종 답은 맞혔으나 풀이 방식이 해설과 다릅니다.`
+        : '분석된 문제에서 두드러진 강점을 찾기 어렵습니다. 기초부터 재정비가 필요합니다.');
+
+  // 보완점
+  const weaknesses = errProbs.length > 0
+    ? errProbs.map(p => {
+        const fb = p.feedback?.evaluation || '';
+        return `${p.number}번: ${fb.slice(0,60)}${fb.length>60?'…':''}`;
+      }).join(' / ')
+    : (diffProbs.length > 0
+        ? `${diffProbs.map(p=>p.number+'번').join(', ')}에서 풀이 접근 방식을 해설과 맞춰볼 필요가 있습니다.`
+        : '큰 오류 없이 풀었습니다.');
+
+  // 오류 패턴
+  const errorPatterns = [];
+  if(errProbs.length >= 2) {
+    errorPatterns.push({
+      type: '개념 오류',
+      count: errProbs.length,
+      problems: errProbs.map(p=>p.number),
+      detail: `${errProbs.map(p=>p.number+'번').join(', ')}에서 반복적으로 오류가 발생했습니다.`
+    });
+  }
+
+  // 취약 개념 (오류 문제의 피드백에서 추출)
+  const weakConcepts = [];
+  const conceptKeywords = {
+    '운동량 보존': ['운동량','충돌','momentum'],
+    '위치-시간 그래프': ['기울기','속도','그래프'],
+    '충격량': ['충격량','impulse','force'],
+    '부호 처리': ['부호','방향','부호 오류'],
+    '질량 관계': ['질량','mass'],
+  };
+  errProbs.concat(diffProbs).forEach(p => {
+    const text = (p.feedback?.evaluation||'') + (p.solution_steps||[]).join(' ');
+    Object.entries(conceptKeywords).forEach(([concept, keywords]) => {
+      if(keywords.some(k=>text.includes(k)) && !weakConcepts.includes(concept)) {
+        weakConcepts.push(concept);
+      }
+    });
+  });
+
+  // 학습 방향
+  const nextSteps = [];
+  if(errProbs.length > 0)
+    nextSteps.push({priority:1, action:`${errProbs.map(p=>p.number+'번').join(', ')} 문제를 해설과 비교하며 틀린 단계를 정확히 파악하고, 유사 유형 문제를 5개 이상 추가로 풀어보세요.`});
+  if(diffProbs.length > 0)
+    nextSteps.push({priority:nextSteps.length+1, action:`${diffProbs.map(p=>p.number+'번').join(', ')} 문제는 답은 맞았으나 해설 방식으로도 풀어보며 정석 풀이를 익히세요.`});
+  if(weakConcepts.length > 0)
+    nextSteps.push({priority:nextSteps.length+1, action:`취약 개념(${weakConcepts.slice(0,2).join(', ')}) 관련 개념 정리 후 해당 유형 문제를 집중적으로 연습하세요.`});
+  if(nextSteps.length === 0)
+    nextSteps.push({priority:1, action:'현재 수준을 유지하며 더 어려운 유형의 문제로 난이도를 높여가세요.'});
+
+  const studyDir = nextSteps.map((s,i)=>`${i+1}. ${s.action}`).join(' ');
+
+  return {strengths, weaknesses, study_direction:studyDir, error_patterns:errorPatterns, weak_concepts:weakConcepts, level, level_reason:levelReason, next_steps:nextSteps};
+}
 
 function renderResults(data){
   const rc=document.getElementById('resultContent');
@@ -1064,21 +1098,18 @@ function renderResults(data){
   const active=weighted.filter(p=>p.judgement!=='분석 제외');
   const avg=(arr,key)=>arr.length?(arr.reduce((s,p)=>s+(p.scores?.[key]||0),0)/arr.length).toFixed(1):'-';
 
-  // ── 제외 문제 배너 ──
   const excluded=weighted.filter(p=>p.judgement==='분석 제외');
   let html='';
   if(excluded.length){
     html+=`<div class="warn-card"><div class="warn-body">⚠ <b>제외된 문제</b><br>${excluded.map(p=>`${p.number}번 문제는 해설/학생 풀이 근거가 너무 약해 자동 제외했습니다.`).join('<br>')}</div></div>`;
   }
 
-  // ── 문제별 피드백 ──
   weighted.forEach(p=>{
     const jColor={'일치':'var(--green)','풀이가 다름':'var(--yellow)','오류 있음':'var(--red)','입력 필요':'var(--text2)'}[p.judgement]||'var(--text2)';
     const simPct=Math.round((p._sim||0)*100);
     html+=`<div class="result-card"><div class="result-card-header">문제 ${p.number} 피드백</div><div class="result-card-body">`;
     html+=`<div class="sec"><div class="sec-title">1. 정답</div><div style="font-size:22px;font-weight:700;color:var(--accent)">${escapeHtml(p.answer||'?')}</div></div>`;
     html+=`<div class="sec"><div class="sec-title">2. 판정</div><div class="box" style="color:${jColor};font-weight:600">${escapeHtml(p.judgement)} &nbsp;|&nbsp; 유사도 ${simPct}% &nbsp;·&nbsp; ${simPct>=70?'양호':simPct>=50?'보통':'매우 낮음'}</div></div>`;
-    // 해설 풀이
     const steps=p.solution_steps||[];
     if(steps.length){
       html+=`<div class="sec"><div class="sec-title">3. 해설 풀이 정리</div>`;
@@ -1087,7 +1118,6 @@ function renderResults(data){
       });
       html+=`</div>`;
     }
-    // 학생 풀이
     const ss=p.student_summary||{};
     html+=`<div class="sec"><div class="sec-title">4. 학생 풀이 정리</div><div class="box">`;
     html+=`<div><b>학생이 세운 식:</b> ${renderSafe(ss.equation||'-')}</div>`;
@@ -1095,14 +1125,12 @@ function renderResults(data){
     html+=`<div><b>학생의 그림/도형:</b> ${renderSafe(ss.drawing||'-')}</div>`;
     html+=`<div><b>학생의 최종 답:</b> <b>${renderSafe(ss.final_answer||'-')}</b></div>`;
     html+=`</div></div>`;
-    // 피드백
     if(p.feedback){
       html+=`<div class="sec"><div class="sec-title">5. 풀이 피드백</div><div class="box">`;
       html+=`<div><b>해설 기준 평가:</b> ${renderSafe(p.feedback?.evaluation||'-')}</div>`;
       html+=`<div style="margin-top:6px"><b>개선점:</b> ${renderSafe(p.feedback?.improvement||'-')}</div>`;
       html+=`</div></div>`;
     }
-    // 역량 점수
     html+=`<div class="sec"><div class="sec-title">6. 역량 점수</div><div class="score-grid">`;
     html+=scoreCell('개념 이해도', p.scores?.concept||0, p.scores?.concept_reason||'');
     html+=scoreCell('풀이 전개력', p.scores?.process||0, p.scores?.process_reason||'');
@@ -1112,7 +1140,6 @@ function renderResults(data){
     html+=`</div></div>`;
   });
 
-  // ── 총평 ──
   const tot=data.total||{};
   const lvlColor={'상':'#16a34a','중상':'#2563eb','중':'#d97706','중하':'#dc2626','하':'#991b1b'};
   const lvlBg={'상':'#dcfce7','중상':'#dbeafe','중':'#fef3c7','중하':'#fee2e2','하':'#fce7f3'};
@@ -1171,7 +1198,6 @@ function renderResults(data){
 function scoreCell(label, val, reason){
   return `<div class="score-cell"><div class="score-label">${escapeHtml(label)}</div><div class="score-val">${val}</div><div class="small muted">/ ${label==='합계'?'30':'10'}점</div><div class="score-reason">${renderItalic(escapeHtml(reason))}</div></div>`;
 }
-
 
 function finishRender(data, rc){
   const fill=document.getElementById('progressFill');
