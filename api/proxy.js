@@ -1,11 +1,12 @@
 // Vercel Node.js Function — OpenRouter 버전
 export const config = { maxDuration: 300 };
 
-// 선호 모델 순서 (2026년 5월 기준 확인된 무료 비전 모델)
+// 선호 모델 순서 (2026년 5월 기준, OCR 성능 우선)
 const PREFERRED_MODELS = [
-  'google/gemma-4-26b-a4b-it:free',   // MoE 구조, 빠름, 비전 지원 확인
-  'google/gemma-4-31b-it:free',        // 31B dense, 비전 지원 확인
-  'openrouter/free',                   // 자동 선택 (위 둘 다 실패 시 fallback)
+  'nvidia/nemotron-nano-12b-v2-vl:free', // 1순위: OCRBench v2 1위, 손글씨 특화
+  'google/gemma-4-26b-a4b-it:free',    // 2순위: 빠름, 비전 지원
+  'google/gemma-4-31b-it:free',        // 3순위
+  'openrouter/free',                   // 최후 fallback
 ];
 
 // 실시간으로 현재 사용 가능한 무료 비전 모델 조회
@@ -181,12 +182,17 @@ export default async function handler(req, res) {
         continue;
       }
 
-      // 성공
+      // 성공 - 빈 응답이면 다음 모델 시도
       let text = '';
       try {
         const d = JSON.parse(resText);
         text = d.choices?.[0]?.message?.content || '';
       } catch {}
+      if (!text || text.trim().length < 5) {
+        // 빈 응답 → 다음 모델로
+        lastErrMsg = '빈 응답 수신'; lastStatus = 500;
+        continue;
+      }
       return res.status(200).json({ content: [{ type: 'text', text }] });
     }
 
